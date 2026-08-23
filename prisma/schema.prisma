@@ -1,0 +1,58 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Service {
+  id              String   @id
+  name            String
+  description     String
+  price           Int
+  durationMinutes Int
+  active           Boolean  @default(true)
+
+  bookings Booking[]
+}
+
+// status is kept as a plain String rather than a native Postgres enum to
+// keep this migration a datasource swap only, not a schema redesign. Valid
+// values are enforced in the application layer (see
+// src/lib/bookings/types.ts) — one of "PENDING" | "CONFIRMED" | "CANCELLED".
+model Booking {
+  id           String @id @default(cuid())
+
+  customerName       String
+  phone              String
+  email              String
+  vehicleDescription String
+
+  // Snapshot of the service at booking time, plus the FK — so historical
+  // bookings stay meaningful even if a service's price/name changes later.
+  serviceId       String
+  service         Service @relation(fields: [serviceId], references: [id])
+  serviceName     String
+  price           Int
+  durationMinutes Int
+
+  // Europe/Dublin business date/time. Stored as plain strings ("YYYY-MM-DD",
+  // "HH:mm") rather than a single DateTime — this sidesteps UTC-conversion
+  // pitfalls entirely, since business-hours / conflict logic only ever
+  // needs to compare local wall-clock date and time, not an instant. See
+  // src/lib/availability/timezone.ts for the full strategy.
+  date      String
+  startTime String
+  endTime   String
+
+  status String @default("CONFIRMED")
+
+  createdAt DateTime @default(now())
+
+  @@index([date])
+}
