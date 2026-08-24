@@ -415,7 +415,33 @@ export function AiConversation({
     };
   }, [state.pendingBooking]);
 
+  // Auto-scrolls the chat's own latest content into view as the
+  // conversation progresses (new message, stage change, etc.) — but not
+  // on the component's initial mount, which happens as soon as this
+  // section is server-rendered onto the homepage, regardless of whether
+  // the visitor has scrolled anywhere near it yet. Without the guard
+  // below, that first run still fires (effects always run once after
+  // mount) and drags the *whole page* down to this section before the
+  // user has done anything.
+  //
+  // No cleanup resets `isInitialMount` back to `true` — a cleanup here
+  // would run before *every* subsequent invocation of this effect (any
+  // real dependency change also triggers cleanup-then-rerun, not just
+  // React Strict Mode's dev-only mount->cleanup->mount replay), which
+  // would re-skip every genuine later scroll and leave the chat's
+  // auto-scroll permanently disabled after the first message. The
+  // one known trade-off: Strict Mode's dev-only replay of the initial
+  // mount calls this effect a second time with `isInitialMount.current`
+  // already `false`, firing one extra `scrollIntoView` during that
+  // replay — harmless (the anchor is already in view, `block: "nearest"`
+  // is a no-op) and confined to local dev, unlike the original bug this
+  // replaces.
+  const isInitialMount = useRef(true);
   useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
     scrollAnchorRef.current?.scrollIntoView({
       behavior: reducedMotion ? "auto" : "smooth",
       block: "nearest",
