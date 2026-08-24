@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useReducedMotion } from "@/hooks/use-reduced-motion";
 
 type ScrubState = {
   eyebrow: string;
@@ -56,7 +55,6 @@ function computeStateVisual(progress: number, index: number) {
 }
 
 export function ScrollScrubVideo() {
-  const reducedMotion = useReducedMotion();
   const sectionRef = useRef<HTMLElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const stateRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -69,8 +67,6 @@ export function ScrollScrubVideo() {
   const pendingSeekTime = useRef<number | null>(null);
 
   useEffect(() => {
-    if (reducedMotion) return;
-
     const video = videoRef.current;
     const section = sectionRef.current;
     if (!video || !section) return;
@@ -226,38 +222,7 @@ export function ScrollScrubVideo() {
       window.removeEventListener("resize", onResize);
       if (rafId.current != null) cancelAnimationFrame(rafId.current);
     };
-  }, [reducedMotion]);
-
-  if (reducedMotion) {
-    return (
-      <section className="bg-obsidian px-6 py-24 md:px-10">
-        <div className="mx-auto max-w-5xl">
-          <video
-            src={SCRUB_VIDEO_SRC}
-            className="aspect-video w-full bg-charcoal object-cover"
-            muted
-            playsInline
-            controls
-            preload="metadata"
-          />
-          <ol className="mt-16 grid gap-x-10 gap-y-12 sm:grid-cols-2">
-            {STATES.map((state) => (
-              <li key={state.eyebrow}>
-                <p className="text-[10px] font-semibold tracking-[0.3em] text-noir-text-secondary">
-                  {state.eyebrow}
-                </p>
-                <p className="mt-3 text-2xl font-bold leading-tight tracking-tight text-noir-text">
-                  {state.lines[0]}
-                  <br />
-                  {state.lines[1]}
-                </p>
-              </li>
-            ))}
-          </ol>
-        </div>
-      </section>
-    );
-  }
+  }, []);
 
   return (
     <section
