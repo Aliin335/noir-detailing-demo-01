@@ -27,16 +27,20 @@ function applyInitialScroll() {
  *    same reason: disabling scroll restoration also stops the browser
  *    auto-scrolling on history traversal, so e.g. going back from `#book`
  *    to the hash-less URL no longer returns to the top on its own.
- * 3. `pageshow` with `event.persisted` (restored from the browser's
- *    back/forward cache — bfcache) — a *different* mechanism from either
- *    of the above: mobile browsers routinely freeze a backgrounded tab
- *    and instantly thaw it later (switching apps, locking the screen,
- *    reopening the browser) without any script re-running at all, not
- *    even this component's mount effect. The frozen snapshot keeps
+ * 3. Every `pageshow` (not just `event.persisted === true`) — mobile
+ *    browsers routinely freeze a backgrounded tab and instantly thaw it
+ *    later (switching apps, locking the screen, the OS reclaiming memory,
+ *    "recently used tabs" restore) without any script re-running at all,
+ *    not even this component's mount effect. The frozen snapshot keeps
  *    whatever scroll position existed when it was backgrounded, which is
  *    what caused the site to keep reopening scrolled down on a real
  *    phone even with the mount/popstate handling above already in place.
- *    `pageshow` is the standard, cross-browser signal for this restore.
+ *    `pageshow` is the standard, cross-browser signal for this restore,
+ *    but mobile Safari/Chrome are inconsistent about setting `persisted`
+ *    on every restore path that behaves this way — so this re-applies on
+ *    *every* pageshow, not just ones flagged `persisted`. That's safe: on
+ *    a genuine fresh load the scroll position this re-asserts is already
+ *    correct, so the extra call is a no-op.
  *
  * `popstate` and `pageshow` never fire for a plain anchor click, so the
  * existing smooth-scroll click-to-section behavior (native browser
@@ -47,15 +51,11 @@ export function InitialScroll() {
   useEffect(() => {
     applyInitialScroll();
 
-    const onPageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) applyInitialScroll();
-    };
-
     window.addEventListener("popstate", applyInitialScroll);
-    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("pageshow", applyInitialScroll);
     return () => {
       window.removeEventListener("popstate", applyInitialScroll);
-      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("pageshow", applyInitialScroll);
     };
   }, []);
 
