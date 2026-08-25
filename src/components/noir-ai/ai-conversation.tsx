@@ -3,99 +3,60 @@
 import { useEffect, useReducer, useRef } from "react";
 import { useInView } from "@/hooks/use-in-view";
 import { useReducedMotion } from "@/hooks/use-reduced-motion";
-import { AiActions, type ActionItem } from "./ai-actions";
 import { AiMessage } from "./ai-message";
-import { BookingConfirmation } from "./booking-confirmation";
-import { BookingSummary } from "./booking-summary";
-import {
-  DAY_LABELS,
-  RECOMMENDATION,
-  fetchAvailability,
-  formatDate,
-  formatIsoDate,
-  resolveDate,
-  submitBooking,
-  toIsoDate,
-  type AvailabilitySlot,
-  type CreateBookingPayload,
-} from "./demo-data";
-import type { ChatMessage, Day, Stage } from "./types";
+import type { ChatMessage, Stage } from "./types";
 
-type PendingAi = { kind: "text" | "recommendation"; text: string; nextStage: Stage } | null;
+const SESSION_STORAGE_KEY = "noir-ai-session-id";
+const TYPING_MESSAGE_ID = "typing-indicator";
 
-type ConfirmedBooking = {
-  date: string; // "YYYY-MM-DD", from the server
-  startTime: string;
-  serviceName: string;
-  price: number;
-};
+/** Stable per-browser-tab id sent with every message so the n8n workflow can
+ * keep conversation memory across turns. Persisted in sessionStorage (not
+ * localStorage) so it survives a reload of this tab/conversation but doesn't
+ * follow the visitor across separate visits. */
+function getOrCreateSessionId(): string {
+  try {
+    const existing = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (existing) return existing;
+    const fresh = crypto.randomUUID();
+    window.sessionStorage.setItem(SESSION_STORAGE_KEY, fresh);
+    return fresh;
+  } catch {
+    // sessionStorage unavailable (e.g. some private-browsing modes) — the
+    // conversation still works, it just won't survive a reload.
+    return crypto.randomUUID();
+  }
+}
 
 type State = {
   stage: Stage;
   messages: ChatMessage[];
-  pendingAi: PendingAi;
-  pendingAvailability: { date: string } | null;
-  pendingBooking: CreateBookingPayload | null;
   nextId: number;
-  vehicle: string;
-  day: Day | null;
-  time: string | null;
-  slots: AvailabilitySlot[];
-  name: string;
-  phone: string;
-  email: string;
   inputValue: string;
-  confirmedBooking: ConfirmedBooking | null;
+  pending: boolean;
 };
 
 const initialState: State = {
   stage: "greeting",
   messages: [],
-  pendingAi: null,
-  pendingAvailability: null,
-  pendingBooking: null,
   nextId: 0,
-  vehicle: "",
-  day: null,
-  time: null,
-  slots: [],
-  name: "",
-  phone: "",
-  email: "",
   inputValue: "",
-  confirmedBooking: null,
+  pending: false,
 };
 
 type Action =
   | { type: "ENTER" }
   | { type: "SET_INPUT"; value: string }
-  | { type: "SUBMIT_INPUT" }
-  | { type: "QUICK_ACTION"; label: string }
-  | { type: "CHECK_AVAILABILITY" }
-  | { type: "SELECT_DAY"; day: Day }
-  | { type: "AVAILABILITY_LOADED"; slots: AvailabilitySlot[] }
-  | { type: "AVAILABILITY_FAILED"; message: string }
-  | { type: "SELECT_TIME"; time: string }
-  | { type: "EDIT" }
-  | { type: "CONFIRM" }
-  | { type: "BOOKING_SUCCEEDED"; booking: ConfirmedBooking }
-  | { type: "BOOKING_CONFLICT" }
-  | { type: "BOOKING_FAILED"; message: string }
-  | { type: "RESOLVE_PENDING" };
+  | { type: "SEND_START"; text: string }
+  | { type: "SEND_SUCCESS"; text: string }
+  | { type: "SEND_FAILURE"; text: string };
 
-function say(state: State, role: "ai" | "user", text: string, kind: ChatMessage["kind"] = "text") {
-  const message: ChatMessage = { id: `m${state.nextId}`, role, kind, text };
+function addMessage(
+  state: State,
+  role: "ai" | "user",
+  text: string
+): Pick<State, "messages" | "nextId"> {
+  const message: ChatMessage = { id: `m${state.nextId}`, role, kind: "text", text };
   return { messages: [...state.messages, message], nextId: state.nextId + 1 };
-}
-
-function requestAvailabilityFor(state: State, day: Day): Partial<State> {
-  return {
-    day,
-    time: null,
-    slots: [],
-    stage: "checking_availability",
-    pendingAvailability: { date: toIsoDate(resolveDate(day)) },
-  };
 }
 
 function reducer(state: State, action: Action): State {
@@ -103,10 +64,10 @@ function reducer(state: State, action: Action): State {
     case "ENTER": {
       if (state.messages.length > 0) return state;
       let next = state;
-      next = { ...next, ...say(next, "ai", "Hi. I'm NOIR's AI receptionist.") };
+      next = { ...next, ...addMessage(next, "ai", "Hi. I'm NOIR's AI receptionist.") };
       next = {
         ...next,
-        ...say(next, "ai", "Tell me about your car and what you'd like to achieve."),
+        ...addMessage(next, "ai", "Tell me about your car and what you'd like to achieve."),
       };
       return next;
     }
@@ -114,235 +75,27 @@ function reducer(state: State, action: Action): State {
     case "SET_INPUT":
       return { ...state, inputValue: action.value };
 
-    case "QUICK_ACTION": {
-      const withUser = { ...state, ...say(state, "user", action.label) };
-      return { ...withUser, stage: "vehicle_input" };
-    }
-
-    case "SUBMIT_INPUT": {
-      const value = state.inputValue.trim();
-      if (!value) return state;
-      const withUser = { ...state, ...say(state, "user", value), inputValue: "" };
-
-      switch (state.stage) {
-        case "vehicle_input":
-          return {
-            ...withUser,
-            vehicle: value,
-            pendingAi: {
-              kind: "recommendation",
-              text: "Thanks — based on what you've told me, I'd recommend our Full Detail.",
-              nextStage: "recommendation_given",
-            },
-          };
-        case "collecting_name":
-          return {
-            ...withUser,
-            name: value,
-            pendingAi: { kind: "text", text: "Phone number", nextStage: "collecting_phone" },
-          };
-        case "collecting_phone":
-          return {
-            ...withUser,
-            phone: value,
-            pendingAi: { kind: "text", text: "Email", nextStage: "collecting_email" },
-          };
-        case "collecting_email":
-          return { ...withUser, email: value, stage: "summary" };
-        default:
-          return state;
-      }
-    }
-
-    case "CHECK_AVAILABILITY": {
-      const withUser = { ...state, ...say(state, "user", "Check availability") };
-      return {
-        ...withUser,
-        pendingAi: {
-          kind: "text",
-          text: "What day works best for you?",
-          nextStage: "date_selection",
-        },
-      };
-    }
-
-    case "SELECT_DAY": {
-      const withUser = { ...state, ...say(state, "user", DAY_LABELS[action.day]) };
-      return { ...withUser, ...requestAvailabilityFor(withUser, action.day) };
-    }
-
-    case "AVAILABILITY_LOADED": {
-      const cleared = { ...state, pendingAvailability: null };
-      if (action.slots.length === 0) {
-        return {
-          ...cleared,
-          ...say(
-            cleared,
-            "ai",
-            "There's nothing available that day — want to try another day?"
-          ),
-          stage: "date_selection",
-        };
-      }
-      return {
-        ...cleared,
-        ...say(cleared, "ai", "Here's what's available:"),
-        slots: action.slots,
-        stage: "time_selection",
-      };
-    }
-
-    case "AVAILABILITY_FAILED": {
-      const cleared = { ...state, pendingAvailability: null };
-      return {
-        ...cleared,
-        ...say(cleared, "ai", action.message),
-        stage: "date_selection",
-      };
-    }
-
-    case "SELECT_TIME": {
-      const withUser = { ...state, ...say(state, "user", action.time) };
-      // If contact details were already collected (e.g. re-picking a time
-      // after a conflict), don't ask for them again — go straight to the
-      // summary instead of back through name/phone/email.
-      const hasContactInfo =
-        withUser.name.trim() !== "" &&
-        withUser.phone.trim() !== "" &&
-        withUser.email.trim() !== "";
-      return {
-        ...withUser,
-        time: action.time,
-        pendingAi: hasContactInfo
-          ? {
-              kind: "text",
-              text: `Perfect. I'll reserve ${action.time} for your ${RECOMMENDATION.service}.`,
-              nextStage: "summary",
-            }
-          : {
-              kind: "text",
-              text: `Perfect. I'll reserve ${action.time} for your ${RECOMMENDATION.service}.\n\nWhat's your name?`,
-              nextStage: "collecting_name",
-            },
-      };
-    }
-
-    case "EDIT":
+    // Every message from here on is handled by the n8n AI receptionist —
+    // this component no longer decides what to say, it only relays.
+    case "SEND_START":
       return {
         ...state,
-        stage: "collecting_name",
-        inputValue: state.name,
-        ...say(state, "ai", "No problem — let's update your details.\n\nWhat's your name?"),
+        ...addMessage(state, "user", action.text),
+        inputValue: "",
+        pending: true,
+        stage: "vehicle_input",
       };
 
-    case "CONFIRM": {
-      if (!state.day || !state.time) return state;
-      const payload: CreateBookingPayload = {
-        customerName: state.name,
-        phone: state.phone,
-        email: state.email,
-        vehicleDescription: state.vehicle,
-        serviceId: RECOMMENDATION.serviceId,
-        date: toIsoDate(resolveDate(state.day)),
-        startTime: state.time,
-      };
-      return { ...state, stage: "submitting_booking", pendingBooking: payload };
-    }
+    case "SEND_SUCCESS":
+      return { ...state, ...addMessage(state, "ai", action.text), pending: false };
 
-    case "BOOKING_SUCCEEDED":
-      return {
-        ...state,
-        pendingBooking: null,
-        confirmedBooking: action.booking,
-        stage: "confirmed",
-      };
-
-    case "BOOKING_CONFLICT": {
-      const cleared = { ...state, pendingBooking: null, time: null };
-      const withMessage = {
-        ...cleared,
-        ...say(
-          cleared,
-          "ai",
-          "That time was just taken. Let me show you the next available options."
-        ),
-      };
-      return state.day
-        ? { ...withMessage, ...requestAvailabilityFor(withMessage, state.day) }
-        : { ...withMessage, stage: "date_selection" };
-    }
-
-    case "BOOKING_FAILED": {
-      const cleared = { ...state, pendingBooking: null };
-      return { ...cleared, ...say(cleared, "ai", action.message), stage: "summary" };
-    }
-
-    case "RESOLVE_PENDING": {
-      if (!state.pendingAi) return state;
-      const { kind, text, nextStage } = state.pendingAi;
-      return {
-        ...state,
-        ...say(state, "ai", text, kind),
-        pendingAi: null,
-        stage: nextStage,
-      };
-    }
+    case "SEND_FAILURE":
+      return { ...state, ...addMessage(state, "ai", action.text), pending: false };
 
     default:
       return state;
   }
 }
-
-function friendlyAvailabilityError(code: string): string {
-  switch (code) {
-    case "PAST_DATE":
-      return "That date has already passed — want to try another day?";
-    case "BUSINESS_CLOSED":
-    case "INVALID_DATE":
-      return "We're closed that day — want to try another day?";
-    case "SERVICE_NOT_FOUND":
-      return "That service isn't available right now. Let's try again shortly.";
-    case "NETWORK_ERROR":
-      return "I couldn't reach the booking system just now — want to try again?";
-    default:
-      return "Something went wrong checking availability — want to try again?";
-  }
-}
-
-function friendlyBookingError(code: string): string {
-  switch (code) {
-    case "PAST_DATE":
-    case "PAST_TIME":
-      return "That time has already passed. Let's pick another slot.";
-    case "BUSINESS_CLOSED":
-      return "That slot doesn't fit within business hours. Let's pick another time.";
-    case "SERVICE_NOT_FOUND":
-      return "That service isn't available right now — sorry about that.";
-    case "NETWORK_ERROR":
-      return "I couldn't reach the booking system just now — please try again.";
-    default:
-      return "Something went wrong saving your booking — please try again.";
-  }
-}
-
-const INPUT_CONFIG: Partial<
-  Record<Stage, { placeholder: string; label: string; type?: string; autoComplete?: string }>
-> = {
-  vehicle_input: { placeholder: "Tell me about your car…", label: "Your message" },
-  collecting_name: { placeholder: "Your name", label: "Your name", autoComplete: "name" },
-  collecting_phone: {
-    placeholder: "Phone number",
-    label: "Phone number",
-    type: "tel",
-    autoComplete: "tel",
-  },
-  collecting_email: {
-    placeholder: "Email",
-    label: "Email",
-    type: "email",
-    autoComplete: "email",
-  },
-};
 
 export function AiConversation({
   onStageChange,
@@ -353,6 +106,7 @@ export function AiConversation({
   const [state, dispatch] = useReducer(reducer, initialState);
   const { ref, inView } = useInView<HTMLDivElement>(0.3);
   const scrollAnchorRef = useRef<HTMLDivElement | null>(null);
+  const sessionIdRef = useRef<string>("");
 
   useEffect(() => {
     if (inView) dispatch({ type: "ENTER" });
@@ -362,61 +116,8 @@ export function AiConversation({
     onStageChange?.(state.stage);
   }, [state.stage, onStageChange]);
 
-  useEffect(() => {
-    if (!state.pendingAi) return;
-    const delay = reducedMotion ? 0 : 450;
-    const id = setTimeout(() => dispatch({ type: "RESOLVE_PENDING" }), delay);
-    return () => clearTimeout(id);
-  }, [state.pendingAi, reducedMotion]);
-
-  // Real availability lookup — see src/app/api/availability/route.ts.
-  useEffect(() => {
-    if (!state.pendingAvailability) return;
-    let cancelled = false;
-    fetchAvailability(state.pendingAvailability.date, RECOMMENDATION.serviceId).then((result) => {
-      if (cancelled) return;
-      if (result.ok) {
-        dispatch({ type: "AVAILABILITY_LOADED", slots: result.slots });
-      } else {
-        dispatch({ type: "AVAILABILITY_FAILED", message: friendlyAvailabilityError(result.code) });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [state.pendingAvailability]);
-
-  // Real booking creation — see src/app/api/bookings/route.ts. The server
-  // re-validates and re-checks the slot; a 409 here means someone else took
-  // it between the availability check and this confirm.
-  useEffect(() => {
-    if (!state.pendingBooking) return;
-    let cancelled = false;
-    submitBooking(state.pendingBooking).then((result) => {
-      if (cancelled) return;
-      if (result.ok) {
-        dispatch({
-          type: "BOOKING_SUCCEEDED",
-          booking: {
-            date: result.booking.date,
-            startTime: result.booking.startTime,
-            serviceName: result.booking.serviceName,
-            price: result.booking.price,
-          },
-        });
-      } else if (result.code === "SLOT_UNAVAILABLE") {
-        dispatch({ type: "BOOKING_CONFLICT" });
-      } else {
-        dispatch({ type: "BOOKING_FAILED", message: friendlyBookingError(result.code) });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [state.pendingBooking]);
-
   // Auto-scrolls the chat's own latest content into view as the
-  // conversation progresses (new message, stage change, etc.) — but not
+  // conversation progresses (new message, pending state, etc.) — but not
   // on the component's initial mount, which happens as soon as this
   // section is server-rendered onto the homepage, regardless of whether
   // the visitor has scrolled anywhere near it yet. Without the guard
@@ -446,41 +147,45 @@ export function AiConversation({
       behavior: reducedMotion ? "auto" : "smooth",
       block: "nearest",
     });
-  }, [state.messages.length, state.stage, reducedMotion]);
+  }, [state.messages.length, state.pending, reducedMotion]);
 
-  const inputConfig = INPUT_CONFIG[state.stage];
-  const showInput = Boolean(inputConfig) && !state.pendingAi;
+  const sendMessage = (text: string) => {
+    if (!sessionIdRef.current) sessionIdRef.current = getOrCreateSessionId();
+    dispatch({ type: "SEND_START", text });
+
+    fetch("/api/ai/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, sessionId: sessionIdRef.current }),
+    })
+      .then(async (res) => {
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          dispatch({
+            type: "SEND_FAILURE",
+            text:
+              body.message ??
+              "Sorry, I'm having trouble responding right now — please try again.",
+          });
+          return;
+        }
+        dispatch({ type: "SEND_SUCCESS", text: body.reply as string });
+      })
+      .catch(() => {
+        dispatch({
+          type: "SEND_FAILURE",
+          text: "I couldn't reach the receptionist just now — please try again.",
+        });
+      });
+  };
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    dispatch({ type: "SUBMIT_INPUT" });
+    if (state.pending) return; // no duplicate submissions while a request is in flight
+    const value = state.inputValue.trim();
+    if (!value) return;
+    sendMessage(value);
   };
-
-  let actions: ActionItem[] = [];
-  if (!state.pendingAi) {
-    if (state.stage === "greeting") {
-      actions = [
-        { label: "BOOK AN APPOINTMENT", onClick: () => dispatch({ type: "QUICK_ACTION", label: "Book an appointment" }) },
-        { label: "EXPLORE SERVICES", onClick: () => { window.location.hash = "services"; } },
-        { label: "GET A RECOMMENDATION", onClick: () => dispatch({ type: "QUICK_ACTION", label: "Get a recommendation" }) },
-      ];
-    } else if (state.stage === "recommendation_given") {
-      actions = [
-        { label: "CHECK AVAILABILITY", arrow: true, onClick: () => dispatch({ type: "CHECK_AVAILABILITY" }) },
-      ];
-    } else if (state.stage === "date_selection") {
-      actions = (Object.keys(DAY_LABELS) as Day[]).map((day) => ({
-        label: DAY_LABELS[day],
-        onClick: () => dispatch({ type: "SELECT_DAY", day }),
-      }));
-    } else if (state.stage === "time_selection") {
-      actions = state.slots.map((slot) => ({
-        label: slot.start,
-        selected: state.time === slot.start,
-        onClick: () => dispatch({ type: "SELECT_TIME", time: slot.start }),
-      }));
-    }
-  }
 
   return (
     <div ref={ref} className="flex flex-col gap-6">
@@ -488,69 +193,37 @@ export function AiConversation({
         {state.messages.map((message) => (
           <AiMessage key={message.id} message={message} />
         ))}
+        {state.pending && (
+          <AiMessage
+            message={{ id: TYPING_MESSAGE_ID, role: "ai", kind: "text", text: "Typing…" }}
+          />
+        )}
       </div>
 
-      {actions.length > 0 && (
-        <AiActions
-          items={actions}
-          heading={
-            state.stage === "time_selection" && state.day
-              ? DAY_LABELS[state.day]
-              : undefined
-          }
-        />
-      )}
-
-      {state.stage === "summary" && (
-        <BookingSummary
-          vehicle={state.vehicle}
-          service={RECOMMENDATION.service}
-          date={state.day ? formatDate(resolveDate(state.day)) : ""}
-          time={state.time ?? ""}
-          price={RECOMMENDATION.price}
-          name={state.name}
-          phone={state.phone}
-          email={state.email}
-          onConfirm={() => dispatch({ type: "CONFIRM" })}
-          onEdit={() => dispatch({ type: "EDIT" })}
-        />
-      )}
-
-      {state.stage === "confirmed" && state.confirmedBooking && (
-        <BookingConfirmation
-          vehicle={state.vehicle}
-          service={state.confirmedBooking.serviceName}
-          date={formatIsoDate(state.confirmedBooking.date)}
-          time={state.confirmedBooking.startTime}
-          price={`€${state.confirmedBooking.price}`}
-        />
-      )}
-
-      {showInput && inputConfig && (
-        <form onSubmit={onSubmit} className="border-l border-transparent pl-4 md:pl-6">
-          <label htmlFor="ai-input" className="sr-only">
-            {inputConfig.label}
-          </label>
-          <div className="flex items-center gap-4 border-b border-graphite pb-2 focus-within:border-silver">
-            <input
-              id="ai-input"
-              type={inputConfig.type ?? "text"}
-              autoComplete={inputConfig.autoComplete}
-              value={state.inputValue}
-              onChange={(e) => dispatch({ type: "SET_INPUT", value: e.target.value })}
-              placeholder={inputConfig.placeholder}
-              className="w-full bg-transparent text-base text-noir-text placeholder:text-noir-text-secondary focus:outline-none md:text-lg"
-            />
-            <button
-              type="submit"
-              aria-label="Send"
-              className="shrink-0 text-noir-text-secondary transition-colors hover:text-noir-text"
-            >
-              →
-            </button>
-          </div>
-        </form>
-      )}
+      <form onSubmit={onSubmit} className="border-l border-transparent pl-4 md:pl-6">
+        <label htmlFor="ai-input" className="sr-only">
+          Your message
+        </label>
+        <div className="flex items-center gap-4 border-b border-graphite pb-2 focus-within:border-silver">
+          <input
+            id="ai-input"
+            type="text"
+            value={state.inputValue}
+            disabled={state.pending}
+            onChange={(e) => dispatch({ type: "SET_INPUT", value: e.target.value })}
+            placeholder="Tell me about your car…"
+            className="w-full bg-transparent text-base text-noir-text placeholder:text-noir-text-secondary focus:outline-none disabled:opacity-50 md:text-lg"
+          />
+          <button
+            type="submit"
+            aria-label="Send"
+            disabled={state.pending}
+            className="shrink-0 text-noir-text-secondary transition-colors hover:text-noir-text disabled:opacity-50"
+          >
+            →
+          </button>
+        </div>
+      </form>
 
       <div ref={scrollAnchorRef} />
     </div>

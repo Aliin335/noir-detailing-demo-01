@@ -10,6 +10,7 @@ export type AppErrorCode =
   | "SERVICE_ID_CONFLICT"
   | "UNAUTHORIZED"
   | "RATE_LIMITED"
+  | "AI_SERVICE_UNAVAILABLE"
   | "INTERNAL_ERROR";
 
 export class AppError extends Error {
@@ -37,6 +38,7 @@ const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   SERVICE_ID_CONFLICT: 409,
   UNAUTHORIZED: 401,
   RATE_LIMITED: 429,
+  AI_SERVICE_UNAVAILABLE: 503,
   INTERNAL_ERROR: 500,
 };
 

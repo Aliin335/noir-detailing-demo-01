@@ -18,6 +18,9 @@ const RATE_LIMITS = {
   // performs a real DB write.
   servicesPublic: { windowMs: 60_000, max: 30 },
   servicesTrusted: { windowMs: 60_000, max: 120 },
+  // Public only — this proxies to an external, metered LLM workflow (n8n),
+  // not something a trusted server-to-server caller would ever hit.
+  aiMessagePublic: { windowMs: 60_000, max: 20 },
 } as const;
 
 type LimiterName = keyof typeof RATE_LIMITS;
