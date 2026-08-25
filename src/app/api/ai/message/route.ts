@@ -4,7 +4,7 @@ import { errorResponse } from "@/lib/http";
 import { appError } from "@/lib/errors";
 
 // PRODUCTION webhook.
-const N8N_WEBHOOK_URL = "https://alliinn1.app.n8n.cloud/webhook/noie-ai-receptionist";
+const N8N_WEBHOOK_URL = "https://alliinn1.app.n8n.cloud/webhook/noie-ai-receptionist-v2";
 const REQUEST_TIMEOUT_MS = 25_000;
 const MAX_MESSAGE_LENGTH = 2000;
 const MAX_SESSION_ID_LENGTH = 200;
