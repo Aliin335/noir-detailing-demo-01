@@ -72,11 +72,18 @@ export function verifySessionToken(token: string | undefined | null): SessionDat
   return data;
 }
 
-const COOKIE_BASE_OPTIONS = {
+// path: "/" (not "/admin") — the cookie must also reach /api/admin/...
+// mutation routes, which don't fall under the "/admin" path prefix per
+// RFC 6265 cookie path-matching. Scoping it to "/admin" previously meant a
+// real browser correctly loaded /admin/services (path matches) but silently
+// withheld the cookie from fetch() calls to /api/admin/services (path
+// doesn't match), making every admin mutation look unauthenticated with no
+// visible cause. See tests/session-cookie.test.ts.
+export const COOKIE_BASE_OPTIONS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: "lax" as const,
-  path: "/admin",
+  path: "/",
 };
 
 export async function createSessionCookie(email: string): Promise<void> {
