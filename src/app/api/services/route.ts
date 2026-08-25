@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getAvailableSlots } from "@/lib/availability";
+import { getActiveServices } from "@/lib/services";
 import { checkAutomationApiKey, getBearerToken } from "@/lib/auth/service-auth";
 import { getClientIp, rateLimiters } from "@/lib/rate-limit";
 import { errorResponse } from "@/lib/http";
@@ -7,11 +7,10 @@ import { appError } from "@/lib/errors";
 
 export async function GET(request: NextRequest) {
   try {
-    // Rate limit before checking key validity, so a brute-forced/guessed key
-    // is capped at the public budget before it can learn anything — see
-    // src/app/api/bookings/route.ts for the identical rationale.
+    // Rate limit before checking key validity — see src/app/api/bookings/route.ts
+    // for the identical rationale (caps key brute-forcing at the public budget).
     const keyCheck = checkAutomationApiKey(request);
-    const limiter = keyCheck === "valid" ? rateLimiters.availabilityTrusted : rateLimiters.availabilityPublic;
+    const limiter = keyCheck === "valid" ? rateLimiters.servicesTrusted : rateLimiters.servicesPublic;
     const rateLimitKey = keyCheck === "valid" ? getBearerToken(request)! : getClientIp(request);
 
     const result = limiter.check(rateLimitKey);
@@ -24,15 +23,16 @@ export async function GET(request: NextRequest) {
       throw appError("UNAUTHORIZED", "Invalid API key.");
     }
 
-    const date = request.nextUrl.searchParams.get("date");
-    const serviceId = request.nextUrl.searchParams.get("serviceId");
-
-    if (!date || !serviceId) {
-      throw appError("INVALID_INPUT", "Both \"date\" and \"serviceId\" query parameters are required.");
-    }
-
-    const slots = await getAvailableSlots(date, serviceId);
-    return NextResponse.json({ date, serviceId, slots });
+    const services = await getActiveServices();
+    return NextResponse.json({
+      services: services.map((service) => ({
+        id: service.id,
+        name: service.name,
+        description: service.description,
+        price: service.price,
+        durationMinutes: service.durationMinutes,
+      })),
+    });
   } catch (err) {
     return errorResponse(err);
   }

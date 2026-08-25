@@ -15,6 +15,11 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(rootDir, "./src"),
+      // Next's bundler resolves "server-only" to its no-op empty.js when
+      // building server code, and to the throwing index.js only for client
+      // bundles — that conditional aliasing is Next-specific and doesn't
+      // exist under Vitest's plain Node resolution, so mirror it here.
+      "server-only": path.resolve(rootDir, "./node_modules/server-only/empty.js"),
     },
   },
   test: {

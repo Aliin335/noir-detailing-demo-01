@@ -18,3 +18,13 @@ export async function getActiveServiceById(id: string): Promise<Service | null> 
   if (!service || !service.active) return null;
   return service;
 }
+
+export { createService, updateService, setServiceActive } from "./mutations";
+export {
+  parseCreateServiceInput,
+  parseUpdateServiceInput,
+  parseSetActiveInput,
+  type CreateServiceInput,
+  type UpdateServiceInput,
+} from "./validation";
+export { slugify } from "./slug";

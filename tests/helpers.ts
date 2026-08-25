@@ -63,6 +63,14 @@ export async function clearBookings() {
   await prisma.booking.deleteMany();
 }
 
+const SEED_SERVICE_IDS = ["essential-detail", "full-detail", "inactive-service"];
+
+/** Removes any service created by a test (e.g. via createService) without
+ * touching the canonical seeded fixtures other test files rely on. */
+export async function clearNonSeedServices() {
+  await prisma.service.deleteMany({ where: { id: { notIn: SEED_SERVICE_IDS } } });
+}
+
 export function validBookingInput(overrides: Record<string, unknown> = {}) {
   return {
     customerName: "Test Customer",

@@ -7,16 +7,21 @@ export type AppErrorCode =
   | "SERVICE_NOT_FOUND"
   | "BUSINESS_CLOSED"
   | "SLOT_UNAVAILABLE"
+  | "SERVICE_ID_CONFLICT"
+  | "UNAUTHORIZED"
+  | "RATE_LIMITED"
   | "INTERNAL_ERROR";
 
 export class AppError extends Error {
   readonly code: AppErrorCode;
   readonly status: number;
+  readonly headers?: Record<string, string>;
 
-  constructor(code: AppErrorCode, message: string, status: number) {
+  constructor(code: AppErrorCode, message: string, status: number, headers?: Record<string, string>) {
     super(message);
     this.code = code;
     this.status = status;
+    this.headers = headers;
   }
 }
 
@@ -29,9 +34,16 @@ const STATUS_BY_CODE: Record<AppErrorCode, number> = {
   SERVICE_NOT_FOUND: 404,
   BUSINESS_CLOSED: 400,
   SLOT_UNAVAILABLE: 409,
+  SERVICE_ID_CONFLICT: 409,
+  UNAUTHORIZED: 401,
+  RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
 };
 
-export function appError(code: AppErrorCode, message: string): AppError {
-  return new AppError(code, message, STATUS_BY_CODE[code]);
+export function appError(
+  code: AppErrorCode,
+  message: string,
+  headers?: Record<string, string>
+): AppError {
+  return new AppError(code, message, STATUS_BY_CODE[code], headers);
 }

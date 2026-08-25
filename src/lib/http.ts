@@ -10,7 +10,10 @@ import { AppError } from "./errors";
  */
 export function errorResponse(err: unknown): NextResponse {
   if (err instanceof AppError) {
-    return NextResponse.json({ error: err.code, message: err.message }, { status: err.status });
+    return NextResponse.json(
+      { error: err.code, message: err.message },
+      { status: err.status, headers: err.headers }
+    );
   }
   console.error("[api] unexpected error:", err);
   return NextResponse.json(
